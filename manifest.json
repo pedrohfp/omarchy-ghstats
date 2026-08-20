@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ricky.ghstats",
+  "name": "GitHub Stats",
+  "version": "1.0.0",
+  "author": "ricky",
+  "license": "MIT",
+  "description": "GitHub contribution boxes and inbox notifications in the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "GitHub Stats",
+    "description": "Year heatmap, streak, and GitHub notifications from the gh CLI.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 120,
+      "showHeatmap": true,
+      "showUnreadCount": true,
+      "hideWhenEmpty": false,
+      "excludeCi": true,
+      "username": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 120
+      },
+      {
+        "key": "showHeatmap",
+        "type": "boolean",
+        "label": "Show last 7 days on the bar",
+        "defaultValue": true
+      },
+      {
+        "key": "showUnreadCount",
+        "type": "boolean",
+        "label": "Show unread notification count",
+        "defaultValue": true
+      },
+      {
+        "key": "hideWhenEmpty",
+        "type": "boolean",
+        "label": "Hide the widget when nothing is unread",
+        "defaultValue": false
+      },
+      {
+        "key": "excludeCi",
+        "type": "boolean",
+        "label": "Hide GitHub Actions / CI notifications",
+        "defaultValue": true
+      },
+      {
+        "key": "username",
+        "type": "string",
+        "label": "GitHub username (blank = signed-in account)"
+      }
+    ]
+  }
+}

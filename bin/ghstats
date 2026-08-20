@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+# Fetch GitHub contribution calendar + notifications for the Omarchy plugin.
+# Speaks only JSON on stdout. Never prints tokens.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+emit() {
+  jq -n "$@"
+}
+
+fail_json() {
+  local err="$1"
+  local hint="${2:-}"
+  emit \
+    --arg err "$err" \
+    --arg hint "$hint" \
+    '{
+      ok: false,
+      authenticated: false,
+      login: "",
+      totalContributions: 0,
+      weeks: [],
+      notifications: [],
+      unread: 0,
+      error: $err,
+      hint: $hint,
+      fetchedAt: (now | todateiso8601)
+    }'
+  exit 0
+}
+
+resolve_gh() {
+  if [[ -n ${GHSTATS_GH:-} && -x ${GHSTATS_GH} ]]; then
+    printf '%s\n' "$GHSTATS_GH"
+    return 0
+  fi
+
+  local candidate
+  # Prefer the real binary. mise shims/wrappers often print a notice on stdout
+  # which is not JSON and would break parsing.
+  for candidate in "$HOME/.local/share/mise/installs/gh/latest/"*/bin/gh; do
+    [[ -n $candidate && -x $candidate ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+
+  local candidates=(
+    /usr/bin/gh
+    /usr/local/bin/gh
+    "$HOME/.local/bin/gh"
+    "$(command -v gh 2>/dev/null || true)"
+    "$HOME/.local/share/mise/shims/gh"
+  )
+  for candidate in "${candidates[@]}"; do
+    [[ -n $candidate && -x $candidate ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+GH=""
+
+# mise and other wrappers sometimes prefix stdout. Keep from the first JSON value.
+extract_json() {
+  awk 'BEGIN { p = 0 } /^[[:space:]]*[{[]/ { p = 1 } p { print }'
+}
+
+gh_json() {
+  local out
+  if ! out="$("$GH" "$@" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "$out" | extract_json
+}
+
+VIEWER_QUERY='query {
+  viewer {
+    login
+    contributionsCollection {
+      contributionCalendar {
+        totalContributions
+        weeks {
+          contributionDays {
+            date
+            contributionCount
+            contributionLevel
+            weekday
+          }
+        }
+      }
+    }
+  }
+}'
+
+USER_QUERY='query($login: String!) {
+  user(login: $login) {
+    login
+    contributionsCollection {
+      contributionCalendar {
+        totalContributions
+        weeks {
+          contributionDays {
+            date
+            contributionCount
+            contributionLevel
+            weekday
+          }
+        }
+      }
+    }
+  }
+  viewer { login }
+}'
+
+calendar_from_viewer() {
+  jq -c '
+    .data.viewer as $v
+    | if $v == null then error("not authenticated") else . end
+    | {
+        login: $v.login,
+        totalContributions: ($v.contributionsCollection.contributionCalendar.totalContributions // 0),
+        weeks: [
+          $v.contributionsCollection.contributionCalendar.weeks[]
+          | {
+              days: [
+                .contributionDays[]
+                | {
+                    date: .date,
+                    count: (.contributionCount // 0),
+                    level: (.contributionLevel // "NONE"),
+                    weekday: (.weekday // 0)
+                  }
+              ]
+            }
+        ]
+      }
+  '
+}
+
+calendar_from_user() {
+  jq -c '
+    if (.data.user == null) then error("user not found") else . end
+    | .data.user as $u
+    | {
+        login: $u.login,
+        viewerLogin: (.data.viewer.login // ""),
+        totalContributions: ($u.contributionsCollection.contributionCalendar.totalContributions // 0),
+        weeks: [
+          $u.contributionsCollection.contributionCalendar.weeks[]
+          | {
+              days: [
+                .contributionDays[]
+                | {
+                    date: .date,
+                    count: (.contributionCount // 0),
+                    level: (.contributionLevel // "NONE"),
+                    weekday: (.weekday // 0)
+                  }
+              ]
+            }
+        ]
+      }
+  '
+}
+
+compact_notifications() {
+  jq -c '
+    if type != "array" then [] else
+      [.[] | {
+        id: (.id | tostring),
+        unread: (.unread == true),
+        reason: (.reason // ""),
+        repo: (.repository.full_name // ""),
+        title: (.subject.title // ""),
+        type: (.subject.type // ""),
+        updatedAt: (.updated_at // ""),
+        apiUrl: (.subject.url // "")
+      }]
+    end
+  '
+}
+
+cmd_snapshot() {
+  local user=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --user)
+        user="${2:-}"
+        shift 2
+        ;;
+      --user=*)
+        user="${1#--user=}"
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  GH="$(resolve_gh)" || fail_json "GitHub CLI (gh) was not found" "Install gh, or run: mise use -g gh"
+
+  local raw calendar
+  if [[ -n $user ]]; then
+    raw="$(gh_json api graphql -f query="$USER_QUERY" -F login="$user" || true)"
+    if [[ -z $raw ]]; then
+      fail_json "Could not reach GitHub" "Check the network, then run: gh auth status"
+    fi
+    if echo "$raw" | jq -e '.errors' >/dev/null 2>&1; then
+      local msg
+      msg="$(echo "$raw" | jq -r '.errors[0].message // "GitHub GraphQL error"')"
+      fail_json "$msg" "Check the username, then run: gh auth status"
+    fi
+    calendar="$(echo "$raw" | calendar_from_user 2>/dev/null || true)"
+    if [[ -z $calendar ]]; then
+      fail_json "User not found: $user" "Set a valid GitHub username in the widget settings"
+    fi
+  else
+    raw="$(gh_json api graphql -f query="$VIEWER_QUERY" || true)"
+    if [[ -z $raw ]]; then
+      fail_json "Could not reach GitHub" "Run: gh auth login"
+    fi
+    if echo "$raw" | jq -e '.errors' >/dev/null 2>&1; then
+      local msg
+      msg="$(echo "$raw" | jq -r '.errors[0].message // "GitHub GraphQL error"')"
+      fail_json "$msg" "Run: gh auth login"
+    fi
+    calendar="$(echo "$raw" | calendar_from_viewer 2>/dev/null || true)"
+    if [[ -z $calendar ]]; then
+      fail_json "Not signed in to GitHub" "Run: gh auth login"
+    fi
+  fi
+
+  local notif_raw="[]"
+  local notif_error=""
+  local notif_hint=""
+  if notif_raw="$(gh_json api "notifications?all=true&per_page=50")"; then
+    :
+  else
+    notif_raw="[]"
+    notif_error="Could not read GitHub notifications"
+    notif_hint="Run: gh auth refresh -s notifications"
+  fi
+
+  local notifications
+  notifications="$(echo "$notif_raw" | compact_notifications 2>/dev/null || echo '[]')"
+
+  jq -n \
+    --argjson cal "$calendar" \
+    --argjson notifications "$notifications" \
+    --arg err "$notif_error" \
+    --arg hint "$notif_hint" \
+    '{
+      ok: true,
+      authenticated: true,
+      login: $cal.login,
+      totalContributions: $cal.totalContributions,
+      weeks: $cal.weeks,
+      notifications: $notifications,
+      unread: ($notifications | map(select(.unread == true)) | length),
+      error: $err,
+      hint: $hint,
+      fetchedAt: (now | todateiso8601)
+    }'
+}
+
+cmd_mark_read() {
+  local id="${1:-}"
+  [[ -n $id ]] || fail_json "Missing notification id"
+
+  GH="$(resolve_gh)" || fail_json "GitHub CLI (gh) was not found" "Install gh"
+
+  if "$GH" api --silent -X PATCH "notifications/threads/$id" >/dev/null 2>&1; then
+    emit --arg id "$id" '{ok: true, id: $id}'
+  else
+    emit --arg id "$id" '{ok: false, id: $id, error: "Could not mark notification as read"}'
+    exit 1
+  fi
+}
+
+cmd_done() {
+  local id="${1:-}"
+  [[ -n $id ]] || fail_json "Missing notification id"
+
+  GH="$(resolve_gh)" || fail_json "GitHub CLI (gh) was not found" "Install gh"
+
+  # Same as GitHub inbox "Done": the thread leaves the notification list.
+  if "$GH" api --silent -X DELETE "notifications/threads/$id" >/dev/null 2>&1; then
+    emit --arg id "$id" '{ok: true, id: $id}'
+  else
+    emit --arg id "$id" '{ok: false, id: $id, error: "Could not dismiss notification"}'
+    exit 1
+  fi
+}
+
+cmd_open() {
+  local url="${1:-}"
+  [[ -n $url ]] || fail_json "Missing URL"
+
+  if command -v omarchy-launch-browser >/dev/null 2>&1; then
+    omarchy-launch-browser "$url" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
+  else
+    fail_json "No browser launcher found"
+  fi
+  emit --arg url "$url" '{ok: true, url: $url}'
+}
+
+usage() {
+  emit --arg err "Usage: ghstats snapshot [--user LOGIN] | mark-read ID | done ID | open URL" \
+    '{ok: false, error: $err}'
+}
+
+main() {
+  local cmd="${1:-snapshot}"
+  if [[ $# -gt 0 ]]; then shift; fi
+  case "$cmd" in
+    snapshot) cmd_snapshot "$@" ;;
+    mark-read|mark_read) cmd_mark_read "$@" ;;
+    done|dismiss) cmd_done "$@" ;;
+    open) cmd_open "$@" ;;
+    -h|--help|help) usage ;;
+    *) fail_json "Unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"
