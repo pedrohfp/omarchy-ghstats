@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.ricky.ghstats",
   "name": "GitHub Stats",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "ricky",
   "license": "MIT",
   "description": "GitHub contribution boxes and inbox notifications in the Omarchy bar.",

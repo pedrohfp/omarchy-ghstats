@@ -28,6 +28,10 @@ assert.match(panel, /property\s+var\s+anchorItem:\s*null/)
 assert.match(panel, /property\s+var\s+hostWidget:\s*null/)
 assert.match(panel, /KeyboardPanel\s*\{/)
 
+const titleBlock = panel.match(/text:\s*Model\.truncate\(modelData\.title,\s*78\)[\s\S]{0,400}/)
+assert.ok(titleBlock, "notification title Text is missing")
+assert.match(titleBlock[0], /textFormat:\s*Text\.PlainText/)
+
 assert.deepEqual(model.parseSnapshot(""), model.emptySnapshot())
 assert.equal(model.parseSnapshot("{not json").ok, false)
 

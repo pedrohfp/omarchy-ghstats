@@ -252,6 +252,7 @@ Panel {
               }
               return root.service.lastError
             }
+            textFormat: Text.PlainText
             color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -395,6 +396,8 @@ Panel {
                     Text {
                       width: parent.width
                       text: Model.truncate(modelData.title, 78)
+                      // Untrusted GitHub titles; AutoText would load remote resources.
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
@@ -412,6 +415,7 @@ Panel {
                         if (when) bits.push(when)
                         return bits.join(" \u00b7 ")
                       }
+                      textFormat: Text.PlainText
                       color: root.secondaryForeground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
