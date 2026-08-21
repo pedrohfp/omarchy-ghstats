@@ -77,14 +77,22 @@ BarWidget {
     labelVisible: false
     active: root.visibleUnread > 0
     dimmed: !service.authenticated && !service.refreshing
+    // The shell paints tooltipText in one Text shared by the whole bar, and
+    // that Text leaves textFormat at Text.AutoText. Untrusted strings must not
+    // land here: markup in a GitHub error message would make omarchy-shell
+    // load a remote resource on hover. Only plugin-owned phrases and the
+    // sanitised login go in; the full error text stays in Panel.qml, which
+    // renders it with textFormat: Text.PlainText.
     tooltipText: {
       if (!service.authenticated && !service.refreshing)
-        return service.lastError || "GitHub · sign in with gh"
+        return Model.barErrorText(service.lastError, service.hint)
       var bits = []
       if (service.login) bits.push("@" + service.login)
       bits.push(service.totalContributions + " this year")
       if (service.streak > 0) bits.push(service.streak + " day streak")
       if (root.visibleUnread > 0) bits.push(root.visibleUnread + " unread")
+      var phrase = Model.errorPhrase(service.lastError, service.hint)
+      if (phrase) bits.push(phrase)
       return bits.join(" \u00b7 ")
     }
     fixedWidth: root.vertical

@@ -3,6 +3,84 @@
 // Pure helpers shared by Service.qml, BarWidget.qml, and Panel.qml.
 // No QML types, so node can run the same functions in model.test.mjs.
 
+// GitHub error messages, helper stderr, and a configured username echoed back
+// by an API error are all attacker-influenced. safeText keeps such a string
+// from ever being read as markup: Qt's Text.AutoText calls mightBeRichText(),
+// which turns a value into HTML as soon as it finds a tag, and an <img src>
+// in an HTML-parsed label makes the shell fetch a remote resource. Dropping
+// angle brackets means no tag can be formed; entities like &lt; may still
+// decode to visible text but never back into a tag, so nothing loads.
+function safeText(value, limit) {
+  var text = String(value === undefined || value === null ? "" : value)
+  var out = ""
+  for (var i = 0; i < text.length; i++) {
+    var code = text.charCodeAt(i)
+    if (code === 0x3c || code === 0x3e) continue
+    // Control characters, C1, and line/paragraph separators become spaces.
+    if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)
+        || code === 0x2028 || code === 0x2029) {
+      out += " "
+      continue
+    }
+    out += text.charAt(i)
+  }
+  out = out.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+  var max = limit || 240
+  if (out.length > max) out = out.slice(0, max - 1) + "\u2026"
+  return out
+}
+
+// GitHub logins are ASCII letters, digits, and hyphens, at most 39 characters.
+function safeLogin(login) {
+  return String(login === undefined || login === null ? "" : login)
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .slice(0, 39)
+}
+
+// Phrases the plugin itself owns. The bar tooltip is a shell-wide Text with
+// textFormat left at Text.AutoText, so only these strings may reach it.
+var ERROR_PHRASES = {
+  helper: "plugin helper missing",
+  cli: "gh CLI not found",
+  network: "cannot reach GitHub",
+  username: "check the username setting",
+  notifications: "inbox needs: gh auth refresh -s notifications",
+  auth: "sign in with gh",
+  unknown: "open the panel for details"
+}
+
+// Reads untrusted text but only ever returns one of the keys above, so no
+// remote bytes travel with the result. A crafted message can pick a wrong
+// bucket; it cannot smuggle content out.
+function errorKind(error, hint) {
+  var text = (String(error || "") + " " + String(hint || "")).toLowerCase()
+  if (!text.replace(/\s+/g, "").length) return ""
+  if (text.indexOf("helper") !== -1) return "helper"
+  if (text.indexOf("github cli") !== -1 || text.indexOf("install gh") !== -1) return "cli"
+  // Before the auth checks: the notifications hint mentions `gh auth refresh`.
+  if (text.indexOf("notification") !== -1) return "notifications"
+  if (text.indexOf("could not reach") !== -1 || text.indexOf("network") !== -1
+      || text.indexOf("timeout") !== -1 || text.indexOf("timed out") !== -1
+      || text.indexOf("dial tcp") !== -1 || text.indexOf("no such host") !== -1) return "network"
+  if (text.indexOf("user not found") !== -1 || text.indexOf("could not resolve to a user") !== -1
+      || text.indexOf("username") !== -1) return "username"
+  if (text.indexOf("not signed in") !== -1 || text.indexOf("auth") !== -1
+      || text.indexOf("credential") !== -1 || text.indexOf("401") !== -1
+      || text.indexOf("403") !== -1) return "auth"
+  return "unknown"
+}
+
+function errorPhrase(error, hint) {
+  var kind = errorKind(error, hint)
+  if (!kind) return ""
+  return ERROR_PHRASES[kind] || ERROR_PHRASES.unknown
+}
+
+// Safe replacement for putting service.lastError in WidgetButton.tooltipText.
+function barErrorText(error, hint) {
+  return "GitHub \u00b7 " + (errorPhrase(error, hint) || ERROR_PHRASES.auth)
+}
+
 function emptySnapshot() {
   return {
     ok: false,
@@ -28,13 +106,14 @@ function parseSnapshot(raw) {
     return {
       ok: data.ok === true,
       authenticated: data.authenticated === true,
-      login: String(data.login || ""),
+      login: safeLogin(data.login),
       totalContributions: Number(data.totalContributions || 0) || 0,
       weeks: Array.isArray(data.weeks) ? data.weeks : [],
       notifications: Array.isArray(data.notifications) ? data.notifications : [],
       unread: Number(data.unread || 0) || 0,
-      error: String(data.error || ""),
-      hint: String(data.hint || ""),
+      // Helper output is untrusted: neutralise it once, here.
+      error: safeText(data.error, 240),
+      hint: safeText(data.hint, 160),
       fetchedAt: String(data.fetchedAt || "")
     }
   } catch (e) {
@@ -357,13 +436,13 @@ function withNotifications(snapshot, list) {
   return {
     ok: src.ok === true,
     authenticated: src.authenticated === true,
-    login: String(src.login || ""),
+    login: safeLogin(src.login),
     totalContributions: Number(src.totalContributions || 0) || 0,
     weeks: src.weeks || [],
     notifications: rows,
     unread: unreadCount(rows, false),
-    error: String(src.error || ""),
-    hint: String(src.hint || ""),
+    error: safeText(src.error, 240),
+    hint: safeText(src.hint, 160),
     fetchedAt: String(src.fetchedAt || "")
   }
 }

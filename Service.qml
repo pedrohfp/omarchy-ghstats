@@ -125,7 +125,10 @@ Item {
         return
       }
       if (!root.snapshot.ok) root.snapshot = parsed
-      root.lastError = parsed.error || String(root._snapshotErr || "").trim() || "Could not load GitHub stats"
+      // parseSnapshot already sanitised its own error; raw stderr has not been.
+      root.lastError = parsed.error
+        || Model.safeText(root._snapshotErr, 240)
+        || "Could not load GitHub stats"
     }
   }
 
